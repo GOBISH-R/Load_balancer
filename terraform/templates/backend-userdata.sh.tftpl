@@ -1,0 +1,54 @@
+#!/bin/bash
+# Backend bootstrap: install Docker, build the Flask image, run it with this instance's identity.
+set -euxo pipefail
+exec > >(tee /var/log/user-data.log) 2>&1
+
+hostnamectl set-hostname ${server_name}
+
+dnf install -y docker
+systemctl enable --now docker
+
+# Instance metadata (IMDSv2).
+TOKEN=$(curl -sS -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+md() { curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/$1"; }
+PRIVATE_IP=$(md local-ipv4)
+INSTANCE_ID=$(md instance-id)
+AZ=$(md placement/availability-zone)
+
+rm -rf /opt/app
+mkdir -p /opt/app
+cd /opt/app
+
+# Application source, written file by file from the Terraform map.
+%{ for path, content in files ~}
+mkdir -p "$(dirname '${path}')"
+cat > '${path}' <<'__EOF_APP_FILE__'
+${content}
+__EOF_APP_FILE__
+%{ endfor ~}
+
+docker build -t lb-backend:latest .
+
+docker rm -f backend 2>/dev/null || true
+docker run -d \
+  --name backend \
+  --hostname ${server_name} \
+  --restart unless-stopped \
+  -p ${backend_port}:5000 \
+  -e SERVER_NAME=${server_name} \
+  -e SERVER_COLOR='${server_color}' \
+  -e PRIVATE_IP="$PRIVATE_IP" \
+  -e INSTANCE_ID="$INSTANCE_ID" \
+  -e AZ="$AZ" \
+  lb-backend:latest
+
+# Wait until the app answers its health check.
+for i in $(seq 1 30); do
+  if curl -fsS "http://127.0.0.1:${backend_port}/health"; then
+    echo "backend ${server_name} is healthy"
+    exit 0
+  fi
+  sleep 2
+done
+echo "backend ${server_name} failed its health check" >&2
+exit 1

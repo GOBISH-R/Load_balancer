@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LB Live Dashboard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Load Balancer Live Dashboard</h1>
+      <p class="sub">Nginx reverse proxy &middot; two Flask backends &middot; AWS EC2</p>
+    </div>
+    <div class="served">This page was served by
+      <span class="pill" style="--c: {{ color }}">{{ server }}</span>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" role="tab" data-tab="dashboard">Dashboard</button>
+    <button class="tab" role="tab" data-tab="servers">Server Info</button>
+    <button class="tab" role="tab" data-tab="health">Health</button>
+  </nav>
+
+  <main>
+    <!-- Dashboard -->
+    <section id="tab-dashboard" class="panel active">
+      <div class="controls">
+        <button id="btn-one">Send 1</button>
+        <button id="btn-ten">Send 10</button>
+        <button id="btn-auto" class="primary">Start auto traffic</button>
+        <label class="rate">Rate
+          <select id="rate">
+            <option value="1000">1 / s</option>
+            <option value="500" selected>2 / s</option>
+            <option value="200">5 / s</option>
+          </select>
+        </label>
+        <button id="btn-reset" class="ghost">Reset</button>
+      </div>
+
+      <div class="card">
+        <h2>Load test</h2>
+        <div class="controls lt-controls">
+          <label class="field">Total requests
+            <select id="lt-total">
+              <option value="100">100</option>
+              <option value="500">500</option>
+              <option value="1000" selected>1,000</option>
+              <option value="2000">2,000</option>
+              <option value="5000">5,000</option>
+            </select>
+          </label>
+          <label class="field">At the same time
+            <select id="lt-concurrency">
+              <option value="1">1</option>
+              <option value="6">6</option>
+              <option value="20">20</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+            </select>
+          </label>
+          <label class="field">Simulated work per request
+            <select id="lt-work">
+              <option value="0" selected>None (fastest)</option>
+              <option value="50">50 ms</option>
+              <option value="r200">Random 0&ndash;200 ms</option>
+              <option value="r500">Random 0&ndash;500 ms</option>
+            </select>
+          </label>
+          <button id="lt-start" class="primary">Run load test</button>
+        </div>
+        <div class="progress"><div id="lt-progress" class="progress-fill"></div></div>
+        <p id="lt-status" class="hint">Fires the chosen number of requests through Nginx, several at a time.</p>
+        <div id="lt-results" class="lt-results" hidden>
+          <div class="stat"><span class="label">Duration</span><span id="lt-duration" class="value">&ndash;</span></div>
+          <div class="stat"><span class="label">Requests / second</span><span id="lt-rps" class="value">&ndash;</span></div>
+          <div class="stat"><span class="label">Succeeded / failed</span><span id="lt-okfail" class="value">&ndash;</span></div>
+          <div class="stat"><span class="label">Split</span><span id="lt-split" class="value small">&ndash;</span></div>
+          <div class="stat"><span class="label">Latency p50 / p95 / p99</span><span id="lt-pct" class="value small">&ndash;</span></div>
+          <div class="stat"><span class="label">Slowest</span><span id="lt-max" class="value">&ndash;</span></div>
+        </div>
+        <p class="hint">Browsers open at most 6 connections per site over plain HTTP, so higher values queue inside
+          the browser and that wait counts in the latency. For truly parallel load use
+          <code>python scripts/load-test.py -n 1000 -c 200</code>.</p>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><span class="label">Requests</span><span id="s-total" class="value">0</span></div>
+        <div class="stat"><span class="label">Failed</span><span id="s-failed" class="value">0</span></div>
+        <div class="stat"><span class="label">Retried by Nginx</span><span id="s-retried" class="value">0</span></div>
+        <div class="stat"><span class="label">Avg latency</span><span id="s-avg" class="value">&ndash;</span></div>
+      </div>
+
+      <div class="card">
+        <h2>Distribution</h2>
+        <div id="dist-bar" class="dist-bar"><div class="empty">No requests yet</div></div>
+        <div id="dist-legend" class="legend"></div>
+      </div>
+
+      <div class="card">
+        <h2>Backends</h2>
+        <div id="backend-status" class="backend-grid">
+          <p class="hint">Send some requests to discover the backends.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Last 60 requests</h2>
+        <div id="timeline" class="timeline"></div>
+        <p class="hint">One square per request, coloured by the backend that answered.
+          Red = failed. Outlined = Nginx retried it on the other backend.</p>
+      </div>
+
+      <div class="card">
+        <h2>Request log</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Time</th><th>Status</th><th>Served by</th><th>Upstream tried</th><th class="num">Latency</th></tr>
+            </thead>
+            <tbody id="log"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Server Info -->
+    <section id="tab-servers" class="panel">
+      <div class="controls">
+        <button id="btn-discover">Refresh server info</button>
+      </div>
+      <div id="server-details" class="backend-grid">
+        <p class="hint">Send some requests to discover the backends.</p>
+      </div>
+    </section>
+
+    <!-- Health -->
+    <section id="tab-health" class="panel">
+      <div class="backend-grid">
+        <div class="card">
+          <h2>Nginx proxy</h2>
+          <p class="health-line"><span id="h-proxy-dot" class="dot"></span><span id="h-proxy">Checking&hellip;</span></p>
+          <p class="hint"><code>GET /nginx-health</code>, answered by Nginx itself.</p>
+        </div>
+        <div class="card">
+          <h2>Backend pool</h2>
+          <p class="health-line"><span id="h-backend-dot" class="dot"></span><span id="h-backend">Checking&hellip;</span></p>
+          <p class="hint"><code>GET /health</code>, proxied to whichever backend Nginx picks.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>How failures are handled</h2>
+        <table class="config">
+          <tbody>
+            <tr><td>Load-balancing algorithm</td><td><span id="h-algo">Round-robin</span>: backends take turns, so equal servers get equal shares</td></tr>
+            <tr><td>Capacity</td><td>Nginx <code>worker_connections 4096</code>, 64 reusable keep-alive connections per backend; each backend runs 3 gunicorn processes &times; 16 threads</td></tr>
+            <tr><td>Passive health check</td><td><code>max_fails=2 fail_timeout=10s</code>: two failures mark a backend down for 10 s, then Nginx tries it again</td></tr>
+            <tr><td>Automatic retry</td><td><code>proxy_next_upstream error timeout http_502 http_503 http_504</code>, up to 2 tries</td></tr>
+            <tr><td>Connect timeout</td><td><code>proxy_connect_timeout 2s</code>: a stopped server costs at most 2 s, not the 60 s default</td></tr>
+            <tr><td>Backend identification</td><td><code>X-Backend-Server</code> and <code>X-Upstream-Addr</code> headers, <code>$upstream_addr</code> in the access log</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>

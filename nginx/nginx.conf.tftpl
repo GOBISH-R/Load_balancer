@@ -1,0 +1,102 @@
+# Nginx reverse proxy + load balancer for Problem 27.
+# Rendered by Terraform (templatefile) with the backends' private IPs and
+# installed as /etc/nginx/nginx.conf on the Amazon Linux 2023 proxy instance.
+
+user nginx;
+worker_processes auto;
+# Each proxied request holds two sockets (client + upstream), so allow plenty of file descriptors.
+worker_rlimit_nofile 16384;
+error_log /var/log/nginx/error.log warn;
+pid /run/nginx.pid;
+
+events {
+    # Per worker; with 2 vCPUs this allows ~4,000 simultaneous proxied requests.
+    worker_connections 4096;
+    multi_accept on;
+}
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+    sendfile      on;
+    tcp_nopush    on;
+    tcp_nodelay   on;
+    keepalive_timeout  65;
+    keepalive_requests 10000;
+    server_tokens off;
+
+    # Every log line records which backend served the request. During a
+    # failover, upstream shows both addresses, e.g. "10.0.1.11:5000, 10.0.1.12:5000".
+    log_format upstreamlog '$remote_addr [$time_local] "$request" $status '
+                           'upstream=$upstream_addr upstream_status=$upstream_status '
+                           'request_time=$request_time upstream_time=$upstream_response_time';
+    access_log /var/log/nginx/access.log upstreamlog;
+
+    # Load-balancing pool. No algorithm directive = round-robin.
+    # Alternatives: "least_conn;" (fewest active connections) or "ip_hash;" (sticky).
+    # Passive health check: 2 failures within 10s marks a server down for 10s,
+    # after which Nginx tries it again and restores it automatically.
+    upstream backend_pool {
+        server ${backend1_ip}:${backend_port} max_fails=2 fail_timeout=10s;
+        server ${backend2_ip}:${backend_port} max_fails=2 fail_timeout=10s;
+
+        # Reuse idle connections to the backends instead of opening a new TCP
+        # connection per request; this matters most during load bursts.
+        keepalive          64;
+        keepalive_requests 10000;
+        keepalive_timeout  60s;
+    }
+
+    server {
+        # Larger accept queue so a burst of ~1,000 new connections is queued, not refused.
+        listen 80 default_server backlog=4096;
+        listen [::]:80 default_server backlog=4096;
+        server_name _;
+
+        location / {
+            proxy_pass http://backend_pool;
+
+            # Upstream keepalive needs HTTP/1.1 and an empty Connection header.
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+
+            # Pass the real client details to the backend.
+            proxy_set_header Host              $host;
+            proxy_set_header X-Real-IP         $remote_addr;
+            proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            # Fail fast: a stopped EC2 instance drops packets silently, so the
+            # 60s default connect timeout would stall requests during failover.
+            proxy_connect_timeout 2s;
+            proxy_send_timeout    10s;
+            proxy_read_timeout    10s;
+
+            # Retry a failed request on the other backend so the client still gets 200.
+            # Non-idempotent requests (POST etc.) are not retried, by design.
+            proxy_next_upstream         error timeout http_502 http_503 http_504;
+            proxy_next_upstream_tries   2;
+            proxy_next_upstream_timeout 5s;
+
+            # Show the client which backend handled the request.
+            add_header X-Upstream-Addr   $upstream_addr always;
+            add_header X-Upstream-Status $upstream_status always;
+            add_header X-LB-Algorithm    "round-robin" always;
+        }
+
+        # Liveness of the proxy itself (does not touch the backends).
+        location = /nginx-health {
+            access_log off;
+            default_type text/plain;
+            return 200 "nginx ok\n";
+        }
+
+        # Connection counters, readable only from the proxy instance itself.
+        location = /nginx_status {
+            stub_status;
+            access_log off;
+            allow 127.0.0.1;
+            deny all;
+        }
+    }
+}

@@ -1,0 +1,17 @@
+#!/bin/bash
+# Proxy bootstrap: install Nginx, install the load-balancer config, validate, start.
+set -euxo pipefail
+exec > >(tee /var/log/user-data.log) 2>&1
+
+hostnamectl set-hostname nginx-proxy
+
+dnf install -y nginx
+
+cat > /etc/nginx/nginx.conf <<'__NGINX_CONF__'
+${nginx_conf}
+__NGINX_CONF__
+
+nginx -t
+systemctl enable --now nginx
+
+curl -fsS http://127.0.0.1/nginx-health

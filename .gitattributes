@@ -1,0 +1,3 @@
+# Scripts and configs run on Linux: keep LF endings even on Windows checkouts.
+* text=auto eol=lf
+*.pem binary

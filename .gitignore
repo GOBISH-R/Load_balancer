@@ -1,0 +1,19 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+terraform.tfvars
+
+# Secrets
+*.pem
+
+# Large raw test logs (summaries live in docs/*.md)
+docs/failover-under-load.csv
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
