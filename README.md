@@ -94,35 +94,3 @@ flowchart TB
 | Python Flask | The backend app and dashboard |
 | Docker | Running the backend app in a container |
 | Terraform | Creating all AWS resources with one command |
-
----
-
-## How to run
-
-You need an AWS account, the AWS CLI and Terraform.
-
-```bash
-aws configure
-cd terraform
-terraform init
-terraform apply
-```
-
-After about 3 minutes, open the `app_url` that Terraform prints.
-
-To delete everything from AWS:
-
-```bash
-terraform destroy
-```
-
----
-
-## Test results
-
-| Test | Result |
-|---|---|
-| 1,000 requests | 500 went to backend-1, 500 to backend-2, 0 failed |
-| One backend stopped while 100 users sent traffic for 150 seconds | 101,521 requests, **0 failed** |
-
-Full results are in the [`docs`](docs) folder.
